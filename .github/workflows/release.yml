@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,42 +13,57 @@ permissions:
 jobs:
   build:
     name: Build binaries
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            use_cross: false
-            artifact: jartool-linux
+            os: ubuntu-latest
+            artifact: jartool-linux-x64
           - target: x86_64-apple-darwin
-            use_cross: true
-            artifact: jartool-macos
-          - target: x86_64-pc-windows-gnu
-            use_cross: true
-            artifact: jartool-windows.exe
+            os: macos-latest
+            artifact: jartool-macos-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: jartool-macos-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: jartool-windows-x64.exe
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Install cross (for cross targets)
-        if: matrix.use_cross == true
-        run: cargo install cross
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Build release binary
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Rename binary
+      - name: Prepare binary (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
-          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
-            mv target/${{ matrix.target }}/release/jartool.exe ${{ matrix.artifact }}
-          else
-            mv target/${{ matrix.target }}/release/jartool ${{ matrix.artifact }}
-          fi
+          cp target/${{ matrix.target }}/release/jartool ${{ matrix.artifact }}
+          strip ${{ matrix.artifact }}
+
+      - name: Prepare binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/jartool.exe ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -55,22 +71,133 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
-  release:
+  create-release:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
+      - name: Extract tag name
+        id: tag_name
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: |
-            artifacts/**/*
+          tag_name: ${{ steps.tag_name.outputs.TAG_NAME }}
+          release_name: JarTool ${{ steps.tag_name.outputs.TAG_NAME }}
+          body: |
+            ## JarTool ${{ steps.tag_name.outputs.TAG_NAME }}
+            
+            Ultra-fast Rust-powered tool for searching inside JAR files, ZIP archives, and all file types.
+            
+            ### 🚀 Features
+            - **Master Search**: Search across JAR, ZIP, Java, config files (.properties, .bat, .conf, .xml, etc.)
+            - **Mini Mode**: Show only unique files with matches (`--mini`)
+            - **Exclusions**: Exclude paths from search (`--exclude`)
+            - **Parallel Processing**: Multi-core performance
+            - **CSV Export**: Export results to CSV
+            - **Rich Statistics**: Detailed performance metrics
+            
+            ### 📦 Downloads
+            
+            | Platform | Architecture | Download |
+            |----------|-------------|----------|
+            | Linux | x64 | `jartool-linux-x64` |
+            | macOS | Intel (x64) | `jartool-macos-x64` |
+            | macOS | Apple Silicon (ARM64) | `jartool-macos-arm64` |
+            | Windows | x64 | `jartool-windows-x64.exe` |
+            
+            ### 📖 Quick Start
+            ```bash
+            # Search for class in JAR files
+            ./jartool --class "StringUtils" --dir /path/to/libs
+            
+            # Master search across all files
+            ./jartool --master "IOException" --dir /path/to/project
+            
+            # Mini mode with exclusions
+            ./jartool --master "TODO" --mini --exclude target --exclude .git
+            ```
+            
+            See the [README](https://github.com/${{ github.repository }}) for detailed usage instructions.
+          draft: false
+          prerelease: false
+
+  upload-assets:
+    name: Upload Release Assets
+    needs: [build, create-release]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - artifact: jartool-linux-x64
+            content-type: application/octet-stream
+          - artifact: jartool-macos-x64
+            content-type: application/octet-stream
+          - artifact: jartool-macos-arm64
+            content-type: application/octet-stream
+          - artifact: jartool-windows-x64.exe
+            content-type: application/octet-stream
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ matrix.artifact }}
+          asset_name: ${{ matrix.artifact }}
+          asset_content_type: ${{ matrix.content-type }}
+
+  # Optional: Create checksums
+  checksums:
+    name: Generate Checksums
+    needs: [build, create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate checksums
+        run: |
+          echo "# JarTool Checksums" > checksums.txt
+          echo "" >> checksums.txt
+          for dir in */; do
+            if [ -d "$dir" ]; then
+              cd "$dir"
+              for file in *; do
+                if [ -f "$file" ]; then
+                  echo "## $file" >> ../checksums.txt
+                  echo '```' >> ../checksums.txt
+                  sha256sum "$file" >> ../checksums.txt
+                  echo '```' >> ../checksums.txt
+                  echo "" >> ../checksums.txt
+                fi
+              done
+              cd ..
+            fi
+          done
+
+      - name: Upload checksums
+        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.WORKFLOW_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./checksums.txt
+          asset_name: checksums.txt
+          asset_content_type: text/plain

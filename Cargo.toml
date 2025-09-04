@@ -1,0 +1,32 @@
+[package]
+name = "jartool"
+version = "4.0.0"
+edition = "2021"
+authors = ["JarTool Rust"]
+description = "Blazing fast JAR and Java file analysis tool with regex search capabilities"
+license = "MIT"
+keywords = ["jar", "java", "search", "analysis", "zip"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "jartool"
+path = "main.rs"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+colored = "2.1"
+csv = "1.3"
+rayon = "1.8"
+regex = "1.10"
+walkdir = "2.4"
+zip = "0.6"
+num_cpus = "1.16"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1

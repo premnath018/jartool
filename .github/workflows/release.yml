@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   build:
     name: Build binaries
@@ -13,31 +17,33 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            use_cross: false
             artifact: jartool-linux
           - target: x86_64-apple-darwin
-            os: macos-latest
+            use_cross: true
             artifact: jartool-macos
           - target: x86_64-pc-windows-gnu
-            os: windows-latest
+            use_cross: true
             artifact: jartool-windows.exe
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
+      - name: Install cross (for cross targets)
+        if: matrix.use_cross == true
+        run: cargo install cross
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
 
       - name: Rename binary
         run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-gnu" ]; then
             mv target/${{ matrix.target }}/release/jartool.exe ${{ matrix.artifact }}
           else
             mv target/${{ matrix.target }}/release/jartool ${{ matrix.artifact }}

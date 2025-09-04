@@ -303,7 +303,6 @@ JarTool processes **all file types** including:
 ## License
 
 MIT License - see LICENSE for details.
-
 ---
 
 **Happy searching!** 🔍✨
